@@ -32,6 +32,9 @@ public:
 	}
 };
 
+template<typename T>
+auto byte_array_deleter = [&](T *resource) { delete[](BYTE*) resource; };
+
 class tokenTemplate {
 
 private:
@@ -290,12 +293,11 @@ bool hasPrilivege(const HANDLE processHandle, LPCTSTR privilege) {
 	DWORD bufferSize = 0;
 	GetTokenInformation(tokenHandle, TokenPrivileges, NULL, 0, &bufferSize);
 	SetLastError(0);
-	PTOKEN_PRIVILEGES tokenPrivileges = (PTOKEN_PRIVILEGES) new BYTE[bufferSize];
-	GetTokenInformation(tokenHandle, TokenPrivileges, (LPVOID)tokenPrivileges, bufferSize, &bufferSize);
+	std::unique_ptr<TOKEN_PRIVILEGES, decltype(byte_array_deleter<TOKEN_PRIVILEGES>)> tokenPrivileges( (PTOKEN_PRIVILEGES) new BYTE[bufferSize], byte_array_deleter<TOKEN_PRIVILEGES>);
+	GetTokenInformation(tokenHandle, TokenPrivileges, (LPVOID)tokenPrivileges.get(), bufferSize, &bufferSize);
 	if (GetLastError() != 0)
 	{
 		CloseHandle(tokenHandle);
-		delete[](BYTE*) tokenPrivileges;
 		reportError(L"Cannot query selected token");
 		return false;
 	}
@@ -304,20 +306,17 @@ bool hasPrilivege(const HANDLE processHandle, LPCTSTR privilege) {
 	{
 		bufferSize = 0;
 		LookupPrivilegeName(NULL, &(tokenPrivileges->Privileges[i]).Luid, NULL, &bufferSize);
-		LPTSTR name = (LPTSTR) new BYTE[bufferSize * sizeof(TCHAR)];
-		LookupPrivilegeName(NULL, &(tokenPrivileges->Privileges[i]).Luid, name, &bufferSize);
-		if (wcscmp(name, privilege) == 0)
+		//LPTSTR name = (LPTSTR) new BYTE[bufferSize * sizeof(TCHAR)];
+		std::unique_ptr<WCHAR, decltype(byte_array_deleter<WCHAR>)> name((LPTSTR) new BYTE[bufferSize * sizeof(TCHAR)], byte_array_deleter<WCHAR>);
+		LookupPrivilegeName(NULL, &(tokenPrivileges->Privileges[i]).Luid, name.get(), &bufferSize);
+		if (wcscmp(name.get(), privilege) == 0)
 		{
 			CloseHandle(tokenHandle);
-			delete[](BYTE*) tokenPrivileges;
-			delete[](BYTE*) name;
 			return true;
 		}
-		delete[](BYTE*) name;
 	}
 	reportError(L"Selected token does not posses SeCreateTokenPrivilege");
 	CloseHandle(tokenHandle);
-	delete[](BYTE*) tokenPrivileges;
 	return false;
 }
 
@@ -340,30 +339,23 @@ bool processIsLocalSystem(HANDLE processHandle) {
 	DWORD bufferSize = 0;
 	GetTokenInformation(processToken, TokenUser, NULL, 0, &bufferSize);
 	SetLastError(0);
-	PTOKEN_USER tokenUser = (PTOKEN_USER) new BYTE[bufferSize];
-	if (!GetTokenInformation(processToken, TokenUser, (LPVOID)tokenUser, bufferSize, &bufferSize)) {
-		delete[](BYTE*) tokenUser;
+	std::unique_ptr<TOKEN_USER, decltype(byte_array_deleter<TOKEN_USER>)> tokenUser((PTOKEN_USER) new BYTE[bufferSize], byte_array_deleter<TOKEN_USER>);
+	if (!GetTokenInformation(processToken, TokenUser, (LPVOID)tokenUser.get(), bufferSize, &bufferSize)) {
 		reportError(L"Cannot get token information");
 		return false;
 	}
 
 	DWORD sidSize = SECURITY_MAX_SID_SIZE;
-	PSID systemSID = (PSID) new BYTE[sidSize];
-	if (!CreateWellKnownSid(WinLocalSystemSid, NULL, systemSID, &sidSize)){
-		delete[](BYTE*) tokenUser;
-		delete[](BYTE*) systemSID;
+	std::unique_ptr<SID, decltype(byte_array_deleter<SID>)> systemSID((SID*) new BYTE[sidSize], byte_array_deleter<SID>);
+	if (!CreateWellKnownSid(WinLocalSystemSid, NULL, systemSID.get(), &sidSize)){
 		reportError(L"Cannot create system SID");
 		return false;
 	}
 
-	if (!EqualSid(systemSID, tokenUser->User.Sid)) {
-		delete[](BYTE*) systemSID;
-		delete[](BYTE*) tokenUser;
+	if (!EqualSid(systemSID.get(), tokenUser->User.Sid)) {
 		return false;
 	}
 
-	delete[](BYTE*) systemSID;
-	delete[](BYTE*) tokenUser;
 	return true;
 }
 
@@ -431,17 +423,15 @@ bool getGroupSid(LPWSTR groupName, PSID &sid) {
 	DWORD bufferSize = 0, buffer2Size = 0;
 
 	LookupAccountName(NULL, groupName, NULL, &bufferSize, NULL, &buffer2Size, &accountType);
-	sid = (PSID) new BYTE[bufferSize];
-	LPTSTR domain = (LPTSTR) new BYTE[buffer2Size * sizeof(TCHAR)];
-	if (!LookupAccountName(NULL, groupName, sid, &bufferSize, domain, &buffer2Size, &accountType)) {
+	std::unique_ptr<SID, decltype(byte_array_deleter<SID>)> tmpSid((SID*) new BYTE[bufferSize], byte_array_deleter<SID>);
+	std::unique_ptr<WCHAR, decltype(byte_array_deleter<WCHAR>)> domain((LPTSTR) new BYTE[buffer2Size * sizeof(TCHAR)], byte_array_deleter<WCHAR>);
+	if (!LookupAccountName(NULL, groupName, tmpSid.get(), &bufferSize, domain.get(), &buffer2Size, &accountType)) {
 		reportError(L"Could not retrieve SID of newly created group");
 		NetLocalGroupDel(NULL, groupName);
-		delete[](BYTE*) sid;
-		delete[](BYTE*) domain;
-		sid = NULL;
+		sid = nullptr;
 		return false;
 	}
-	delete[](BYTE*) domain;
+	sid = tmpSid.release();
 	return true;
 }
 
@@ -628,8 +618,8 @@ tokenTemplate::tokenTemplate(HANDLE &userToken) : objectAttributes{ nullptr }, a
 	bufferSize = 0;
 	GetTokenInformation(userToken, TokenStatistics, NULL, 0, &bufferSize);
 	SetLastError(0);
-	PTOKEN_STATISTICS stats = (PTOKEN_STATISTICS) new BYTE[bufferSize];
-	GetTokenInformation(userToken, TokenStatistics, (LPVOID)stats, bufferSize, &bufferSize);
+	std::unique_ptr<TOKEN_STATISTICS, decltype(byte_array_deleter<TOKEN_STATISTICS>)> stats((PTOKEN_STATISTICS) new BYTE[bufferSize], byte_array_deleter<TOKEN_STATISTICS>);
+	GetTokenInformation(userToken, TokenStatistics, (LPVOID)stats.get(), bufferSize, &bufferSize);
 	if (GetLastError() != 0)
 	{
 		this->cleanup();
@@ -647,8 +637,6 @@ tokenTemplate::tokenTemplate(HANDLE &userToken) : objectAttributes{ nullptr }, a
 	objectAttributes = oa;
 
 	modifiedGroups = NULL;
-
-	delete[](BYTE*) stats;
 }
 
 tokenTemplate::~tokenTemplate() {
