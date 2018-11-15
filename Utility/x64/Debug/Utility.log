@@ -1,0 +1,3 @@
+﻿  stdafx.cpp
+  Utility.cpp
+LINK : fatal error LNK1104: cannot open file 'C:\Users\PB-Win\Desktop\advanced_sec\TokenManipulationUtility\SharedFunctionality\x64\Debug\SharedFunctionality.lib'
