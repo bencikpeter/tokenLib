@@ -24,6 +24,7 @@ std::optional<std::vector<DWORD>> getAllProcesses();
 std::optional<std::vector<DWORD>> getProcessesWithBothPrivileges(const std::vector<DWORD>& allProcesses);
 std::optional<HANDLE> getProcessUnderLocalSystem(std::vector<DWORD> processes);
 void inline reportError(std::wstring errorString);
+DWORD GetTokenInformationSizeWrapper(HANDLE TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass);
 
 class TokenParsingException : public std::exception {
 public:
@@ -33,7 +34,9 @@ public:
 };
 
 template<typename T>
-auto byte_array_deleter = [&](T *resource) { delete[](BYTE*) resource; };
+auto byte_array_deleter = [&](T *resource)  { delete[](BYTE*) resource; };
+
+auto objectAttributes_deleter = [&](POBJECT_ATTRIBUTES oa) { if(oa != nullptr) delete static_cast<PSECURITY_QUALITY_OF_SERVICE>(oa->SecurityQualityOfService); delete oa; };
 
 class tokenTemplate {
 
@@ -55,27 +58,25 @@ private:
 		);
 	NT_CREATE_TOKEN NtCreateToken = NULL;
 
-	ACCESS_MASK			accessMask;
-	POBJECT_ATTRIBUTES	objectAttributes;
-	TOKEN_TYPE			tokenType;
-	PLUID				authenticationId;
-	PLARGE_INTEGER		expirationTime;
-	PTOKEN_USER         tokenUser;
-	PTOKEN_GROUPS       tokenGroups;
-	PTOKEN_PRIVILEGES   tokenPrivileges;
-	PTOKEN_OWNER        tokenOwner;
-	PTOKEN_PRIMARY_GROUP tokenPrimaryGroup;
-	PTOKEN_DEFAULT_DACL tokenDefaultDacl;
-	PTOKEN_SOURCE       tokenSource;
-	PTOKEN_GROUPS		modifiedGroups;
+	ACCESS_MASK																				accessMask;
+	TOKEN_TYPE																				tokenType; 
+	std::unique_ptr<OBJECT_ATTRIBUTES, decltype(objectAttributes_deleter)>					objectAttributes;
+	std::unique_ptr<LUID>																	authenticationId;
+	std::unique_ptr<LARGE_INTEGER>															expirationTime;
+	std::unique_ptr<TOKEN_USER,decltype(byte_array_deleter<TOKEN_USER>)>					tokenUser;
+	std::unique_ptr<TOKEN_GROUPS, decltype(byte_array_deleter<TOKEN_GROUPS>)>				tokenGroups;
+	std::unique_ptr<TOKEN_PRIVILEGES, decltype(byte_array_deleter<TOKEN_PRIVILEGES>)>		tokenPrivileges;
+	std::unique_ptr<TOKEN_OWNER, decltype(byte_array_deleter<TOKEN_OWNER>)>					tokenOwner;
+	std::unique_ptr<TOKEN_PRIMARY_GROUP, decltype(byte_array_deleter<TOKEN_PRIMARY_GROUP>)> tokenPrimaryGroup;
+	std::unique_ptr<TOKEN_DEFAULT_DACL, decltype(byte_array_deleter<TOKEN_DEFAULT_DACL>)>	tokenDefaultDacl;
+	std::unique_ptr<TOKEN_SOURCE, decltype(byte_array_deleter<TOKEN_SOURCE>)>				tokenSource;
+	std::unique_ptr<TOKEN_GROUPS, decltype(byte_array_deleter<TOKEN_GROUPS>)>				modifiedGroups;
 
-	void cleanup();
 public:
 	tokenTemplate(HANDLE &userToken);
-	~tokenTemplate();
 
 	// these need to be customized if needed so memory of member pointers also gets copied
-	// (otherwise there could be use-after-frees in the destructor)
+	// (otherwise there could be use-after-frees when destructing one)
 	tokenTemplate(const tokenTemplate &) = delete;
 	tokenTemplate operator=(const tokenTemplate &) = delete;
 
@@ -503,25 +504,17 @@ bool changeTcbPrivilege(bool privilegeStatus){
 	return changePrivilege(privilegeStatus, SE_TCB_NAME);
 }
 
-void tokenTemplate::cleanup()
-{
-	if (objectAttributes != nullptr) delete static_cast<PSECURITY_QUALITY_OF_SERVICE>(objectAttributes->SecurityQualityOfService);
-	delete objectAttributes;
-	delete authenticationId;
-	delete expirationTime;
-	delete[](BYTE*) tokenUser;
-	delete[](BYTE*) tokenGroups;
-	delete[](BYTE*) modifiedGroups;
-	delete[](BYTE*) tokenPrivileges;
-	delete[](BYTE*) tokenOwner;
-	delete[](BYTE*) tokenPrimaryGroup;
-	delete[](BYTE*) tokenDefaultDacl;
-	delete[](BYTE*) tokenSource;
-}
-
-tokenTemplate::tokenTemplate(HANDLE &userToken) : objectAttributes{ nullptr }, authenticationId{ nullptr }, expirationTime{ nullptr },
-													tokenUser{ nullptr }, tokenGroups{ nullptr }, tokenPrivileges{ nullptr }, tokenOwner{ nullptr },
-													tokenPrimaryGroup{ nullptr }, tokenDefaultDacl{ nullptr }, tokenSource{ nullptr } {
+tokenTemplate::tokenTemplate(HANDLE &userToken) :  authenticationId(), 
+													expirationTime(),
+													tokenUser((PTOKEN_USER) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenUser)], byte_array_deleter<TOKEN_USER>),
+													tokenGroups((PTOKEN_GROUPS) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenGroups)], byte_array_deleter<TOKEN_GROUPS>),
+													tokenPrivileges((PTOKEN_PRIVILEGES) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenPrivileges)], byte_array_deleter<TOKEN_PRIVILEGES>),
+													tokenOwner((PTOKEN_OWNER) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenOwner)], byte_array_deleter<TOKEN_OWNER>),
+													tokenPrimaryGroup((PTOKEN_PRIMARY_GROUP) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenPrimaryGroup)], byte_array_deleter<TOKEN_PRIMARY_GROUP>),
+													tokenDefaultDacl((PTOKEN_DEFAULT_DACL) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenDefaultDacl)], byte_array_deleter<TOKEN_DEFAULT_DACL>), 
+													tokenSource((PTOKEN_SOURCE) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenSource)], byte_array_deleter<TOKEN_SOURCE>),
+													objectAttributes(nullptr, objectAttributes_deleter),
+													modifiedGroups(nullptr, byte_array_deleter<TOKEN_GROUPS>) {
 
 	//load internal NtCreateToken function
 	HMODULE hModule = LoadLibrary(L"ntdll.dll");
@@ -532,116 +525,67 @@ tokenTemplate::tokenTemplate(HANDLE &userToken) : objectAttributes{ nullptr }, a
 	GetTokenInformation(userToken, TokenType, NULL, 0, &bufferSize);
 	SetLastError(0);
 	GetTokenInformation(userToken, TokenType, (LPVOID)&tokenType, bufferSize, &bufferSize);
-	if (GetLastError() != 0)
-	{
-		this->cleanup();
-		throw TokenParsingException();
-	}
+	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
 	GetTokenInformation(userToken, TokenUser, NULL, 0, &bufferSize);
 	SetLastError(0);
-	tokenUser = (PTOKEN_USER) new BYTE[bufferSize];
-	GetTokenInformation(userToken, TokenUser, (LPVOID)tokenUser, bufferSize, &bufferSize);
-	if (GetLastError() != 0)
-	{
-		this->cleanup();
-		throw TokenParsingException();
-	}
+	GetTokenInformation(userToken, TokenUser, (LPVOID)tokenUser.get(), bufferSize, &bufferSize);
+	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
 	GetTokenInformation(userToken, TokenGroups, NULL, 0, &bufferSize);
 	SetLastError(0);
-	tokenGroups = (PTOKEN_GROUPS) new BYTE[bufferSize];
-	GetTokenInformation(userToken, TokenGroups, (LPVOID)tokenGroups, bufferSize, &bufferSize);
-	if (GetLastError() != 0)
-	{
-		this->cleanup();
-		throw TokenParsingException();
-	}
+	GetTokenInformation(userToken, TokenGroups, (LPVOID)tokenGroups.get(), bufferSize, &bufferSize);
+	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
 	GetTokenInformation(userToken, TokenPrivileges, NULL, 0, &bufferSize);
 	SetLastError(0);
-	tokenPrivileges = (PTOKEN_PRIVILEGES) new BYTE[bufferSize];
-	GetTokenInformation(userToken, TokenPrivileges, (LPVOID)tokenPrivileges, bufferSize, &bufferSize);
-	if (GetLastError() != 0)
-	{
-		this->cleanup();
-		throw TokenParsingException();
-	}
+	GetTokenInformation(userToken, TokenPrivileges, (LPVOID)tokenPrivileges.get(), bufferSize, &bufferSize);
+	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
 	GetTokenInformation(userToken, TokenOwner, NULL, 0, &bufferSize);
 	SetLastError(0);
-	tokenOwner = (PTOKEN_OWNER) new BYTE[bufferSize];
-	GetTokenInformation(userToken, TokenOwner, (LPVOID)tokenOwner, bufferSize, &bufferSize);
-	if (GetLastError() != 0)
-	{
-		this->cleanup();
-		throw TokenParsingException();
-	}
+	GetTokenInformation(userToken, TokenOwner, (LPVOID)tokenOwner.get(), bufferSize, &bufferSize);
+	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
 	GetTokenInformation(userToken, TokenPrimaryGroup, NULL, 0, &bufferSize);
 	SetLastError(0);
-	tokenPrimaryGroup = (PTOKEN_PRIMARY_GROUP) new BYTE[bufferSize];
-	GetTokenInformation(userToken, TokenPrimaryGroup, (LPVOID)tokenPrimaryGroup, bufferSize, &bufferSize);
-	if (GetLastError() != 0)
-	{
-		this->cleanup();
-		throw TokenParsingException();
-	}
+	GetTokenInformation(userToken, TokenPrimaryGroup, (LPVOID)tokenPrimaryGroup.get(), bufferSize, &bufferSize);
+	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
 	GetTokenInformation(userToken, TokenDefaultDacl, NULL, 0, &bufferSize);
 	SetLastError(0);
-	tokenDefaultDacl = (PTOKEN_DEFAULT_DACL) new BYTE[bufferSize];
-	GetTokenInformation(userToken, TokenDefaultDacl, (LPVOID)tokenDefaultDacl, bufferSize, &bufferSize);
-	if (GetLastError() != 0)
-	{
-		this->cleanup();
-		throw TokenParsingException();
-	}
+	GetTokenInformation(userToken, TokenDefaultDacl, (LPVOID)tokenDefaultDacl.get(), bufferSize, &bufferSize);
+	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
 	GetTokenInformation(userToken, TokenSource, NULL, 0, &bufferSize);
 	SetLastError(0);
-	tokenSource = (PTOKEN_SOURCE) new BYTE[bufferSize];
-	GetTokenInformation(userToken, TokenSource, (LPVOID)tokenSource, bufferSize, &bufferSize);
-	if (GetLastError() != 0)
-	{
-		this->cleanup();
-		throw TokenParsingException();
-	}
+	GetTokenInformation(userToken, TokenSource, (LPVOID)tokenSource.get(), bufferSize, &bufferSize);
+	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
 	GetTokenInformation(userToken, TokenStatistics, NULL, 0, &bufferSize);
 	SetLastError(0);
 	std::unique_ptr<TOKEN_STATISTICS, decltype(byte_array_deleter<TOKEN_STATISTICS>)> stats((PTOKEN_STATISTICS) new BYTE[bufferSize], byte_array_deleter<TOKEN_STATISTICS>);
 	GetTokenInformation(userToken, TokenStatistics, (LPVOID)stats.get(), bufferSize, &bufferSize);
-	if (GetLastError() != 0)
-	{
-		this->cleanup();
-		throw TokenParsingException();
-	}
+	if (GetLastError() != 0) throw TokenParsingException();
 
-	expirationTime = new LARGE_INTEGER{ stats->ExpirationTime };
-	authenticationId = new LUID{ stats->AuthenticationId };
+	expirationTime = std::make_unique<LARGE_INTEGER>(LARGE_INTEGER{ stats->ExpirationTime });
+	authenticationId = std::make_unique<LUID>(LUID{ stats->AuthenticationId });
 
 	accessMask = TOKEN_ALL_ACCESS;
 
 	PSECURITY_QUALITY_OF_SERVICE sqos =
 		new SECURITY_QUALITY_OF_SERVICE{ sizeof(SECURITY_QUALITY_OF_SERVICE), stats->ImpersonationLevel, SECURITY_STATIC_TRACKING, FALSE };
-	POBJECT_ATTRIBUTES oa = new OBJECT_ATTRIBUTES{ sizeof(OBJECT_ATTRIBUTES), 0, 0, 0, 0, sqos };
-	objectAttributes = oa;
-
-	modifiedGroups = NULL;
+	objectAttributes.reset(new OBJECT_ATTRIBUTES{ sizeof(OBJECT_ATTRIBUTES), 0, 0, 0, 0, sqos });
 }
 
-tokenTemplate::~tokenTemplate() {
-	this->cleanup();
-}
 
 inline bool tokenTemplate::addGroup(PSID sid) {
 
@@ -660,7 +604,7 @@ inline bool tokenTemplate::addMultipleGroups(std::vector<PSID> vSid){
 		additionalGroups.push_back(SID_AND_ATTRIBUTES{ vSid.at(i), SE_GROUP_ENABLED });
 	}
 
-	modifiedGroups = (PTOKEN_GROUPS) new BYTE[(FIELD_OFFSET(TOKEN_GROUPS, Groups[groupCount + vSid.size()]))];
+	modifiedGroups.reset((PTOKEN_GROUPS) new BYTE[(FIELD_OFFSET(TOKEN_GROUPS, Groups[groupCount + vSid.size()]))]);
 	//note: this is a somewhat shallow copy, Sid attribute is of type PSID, the actual SID entries are kept in original memory of tokenGroups - modifiedGroups is no longer usable after deallocation of tokenGroups
 	for (size_t i = 0; i < groupCount; i++)
 	{
@@ -683,29 +627,22 @@ inline bool tokenTemplate::generateToken(HANDLE & token) {
 	}
 
 	HANDLE newToken = nullptr;
-	PTOKEN_GROUPS groups = NULL;
 
-	if (modifiedGroups == NULL) { //token not modified
-		groups = tokenGroups;
-	}
-	else {
-		groups = modifiedGroups;
-	}
 	//construct token
 	NTSTATUS status = NtCreateToken(
 		&newToken,
 		accessMask,
-		objectAttributes,
+		objectAttributes.get(),
 		tokenType,
-		authenticationId,
-		expirationTime,
-		tokenUser,
-		groups,
-		tokenPrivileges,
-		tokenOwner,
-		tokenPrimaryGroup,
-		tokenDefaultDacl,
-		tokenSource
+		authenticationId.get(),
+		expirationTime.get(),
+		tokenUser.get(),
+		modifiedGroups == nullptr ? tokenGroups.get() : modifiedGroups.get(),
+		tokenPrivileges.get(),
+		tokenOwner.get(),
+		tokenPrimaryGroup.get(),
+		tokenDefaultDacl.get(),
+		tokenSource.get()
 	);
 
 	//cleanup of privileges
@@ -719,6 +656,12 @@ inline bool tokenTemplate::generateToken(HANDLE & token) {
 
 	token = newToken;
 	return true;
+}
+
+DWORD GetTokenInformationSizeWrapper(HANDLE TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass) {
+	DWORD buffer = 0;
+	GetTokenInformation(TokenHandle, TokenInformationClass, NULL, 0, &buffer);
+	return buffer;
 }
 
 void inline reportError(std::wstring errorString) {
