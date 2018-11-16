@@ -56,7 +56,7 @@ private:
 		IN PTOKEN_DEFAULT_DACL  TokenDefaultDacl,
 		IN PTOKEN_SOURCE        TokenSource
 		);
-	NT_CREATE_TOKEN NtCreateToken = NULL;
+	NT_CREATE_TOKEN NtCreateToken = nullptr;
 
 	ACCESS_MASK																				accessMask;
 	TOKEN_TYPE																				tokenType; 
@@ -93,11 +93,11 @@ namespace tokenLib {
 		localGroupInfo.lgrpi0_name = groupName;
 
 
-		NET_API_STATUS result = NetLocalGroupAdd(NULL, 0, (LPBYTE)&localGroupInfo, NULL);
+		NET_API_STATUS result = NetLocalGroupAdd(nullptr, 0, (LPBYTE)&localGroupInfo, nullptr);
 		if (result != NERR_Success) {
 			if (result == NERR_GroupExists) reportError(L"Specified group name already exists");
 			else reportError(L"Could not create specified group");
-			sid = NULL;
+			sid = nullptr;
 			return false;
 		}
 
@@ -106,12 +106,12 @@ namespace tokenLib {
 
 	DLLEXPORT bool destroySid(PSID &sid) {
 		delete[](BYTE*) sid;
-		sid = NULL;
+		sid = nullptr;
 		return true;
 	}
 
 	DLLEXPORT bool deleteLocalGroup(LPWSTR groupName) {
-		if (NetLocalGroupDel(NULL, groupName) != NERR_Success)
+		if (NetLocalGroupDel(nullptr, groupName) != NERR_Success)
 			return false;
 		return true;
 	}
@@ -227,7 +227,7 @@ namespace tokenLib {
 			reportError(L"Cannot aquire token handle");
 			return false;
 		}
-		if (!DuplicateTokenEx(processToken, MAXIMUM_ALLOWED, NULL, SecurityImpersonation, TokenPrimary, &token)) {
+		if (!DuplicateTokenEx(processToken, MAXIMUM_ALLOWED, nullptr, SecurityImpersonation, TokenPrimary, &token)) {
 			token = nullptr;
 			CloseHandle(processHandle);
 			CloseHandle(processToken);
@@ -263,7 +263,7 @@ std::optional<std::vector<DWORD>> getProcessesWithBothPrivileges(const std::vect
 	for (auto const& processPid: allProcesses)
 	{
 		HANDLE processHandle;
-		if ((processHandle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processPid)) == NULL) continue;
+		if ((processHandle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, processPid)) == nullptr) continue;
 		try
 		{
 			if (hasSeCreateTokenPrivilege(processHandle) && hasSeTcbPrivilege(processHandle))
@@ -292,7 +292,7 @@ bool hasPrilivege(const HANDLE processHandle, LPCTSTR privilege) {
 		return false;
 	}
 	DWORD bufferSize = 0;
-	GetTokenInformation(tokenHandle, TokenPrivileges, NULL, 0, &bufferSize);
+	GetTokenInformation(tokenHandle, TokenPrivileges, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	std::unique_ptr<TOKEN_PRIVILEGES, decltype(byte_array_deleter<TOKEN_PRIVILEGES>)> tokenPrivileges( (PTOKEN_PRIVILEGES) new BYTE[bufferSize], byte_array_deleter<TOKEN_PRIVILEGES>);
 	GetTokenInformation(tokenHandle, TokenPrivileges, (LPVOID)tokenPrivileges.get(), bufferSize, &bufferSize);
@@ -306,10 +306,10 @@ bool hasPrilivege(const HANDLE processHandle, LPCTSTR privilege) {
 	for (size_t i = 0; i < tokenPrivileges->PrivilegeCount; i++)
 	{
 		bufferSize = 0;
-		LookupPrivilegeName(NULL, &(tokenPrivileges->Privileges[i]).Luid, NULL, &bufferSize);
+		LookupPrivilegeName(nullptr, &(tokenPrivileges->Privileges[i]).Luid, nullptr, &bufferSize);
 		//LPTSTR name = (LPTSTR) new BYTE[bufferSize * sizeof(TCHAR)];
 		std::unique_ptr<WCHAR, decltype(byte_array_deleter<WCHAR>)> name((LPTSTR) new BYTE[bufferSize * sizeof(TCHAR)], byte_array_deleter<WCHAR>);
-		LookupPrivilegeName(NULL, &(tokenPrivileges->Privileges[i]).Luid, name.get(), &bufferSize);
+		LookupPrivilegeName(nullptr, &(tokenPrivileges->Privileges[i]).Luid, name.get(), &bufferSize);
 		if (wcscmp(name.get(), privilege) == 0)
 		{
 			CloseHandle(tokenHandle);
@@ -338,7 +338,7 @@ bool processIsLocalSystem(HANDLE processHandle) {
 	}
 
 	DWORD bufferSize = 0;
-	GetTokenInformation(processToken, TokenUser, NULL, 0, &bufferSize);
+	GetTokenInformation(processToken, TokenUser, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	std::unique_ptr<TOKEN_USER, decltype(byte_array_deleter<TOKEN_USER>)> tokenUser((PTOKEN_USER) new BYTE[bufferSize], byte_array_deleter<TOKEN_USER>);
 	if (!GetTokenInformation(processToken, TokenUser, (LPVOID)tokenUser.get(), bufferSize, &bufferSize)) {
@@ -348,7 +348,7 @@ bool processIsLocalSystem(HANDLE processHandle) {
 
 	DWORD sidSize = SECURITY_MAX_SID_SIZE;
 	std::unique_ptr<SID, decltype(byte_array_deleter<SID>)> systemSID((SID*) new BYTE[sidSize], byte_array_deleter<SID>);
-	if (!CreateWellKnownSid(WinLocalSystemSid, NULL, systemSID.get(), &sidSize)){
+	if (!CreateWellKnownSid(WinLocalSystemSid, nullptr, systemSID.get(), &sidSize)){
 		reportError(L"Cannot create system SID");
 		return false;
 	}
@@ -364,7 +364,7 @@ std::optional<HANDLE> getProcessUnderLocalSystem(std::vector<DWORD> processes){
 	for (auto const& processPid : processes)
 	{
 		HANDLE processHandle;
-		if ((processHandle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processPid)) == NULL) continue;
+		if ((processHandle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, processPid)) == nullptr) continue;
 		try
 		{
 			if (processIsLocalSystem(processHandle))
@@ -411,7 +411,7 @@ std::optional<HANDLE> getCurrentUserToken() {
 	}
 	changeTcbPrivilege(false);
 	HANDLE duplicatedUserToken = nullptr;
-	if (!DuplicateTokenEx(userToken, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &duplicatedUserToken)) {
+	if (!DuplicateTokenEx(userToken, TOKEN_ALL_ACCESS, nullptr, SecurityImpersonation, TokenPrimary, &duplicatedUserToken)) {
 		reportError(L"Cannot duplicate token");
 		return std::nullopt;
 	}
@@ -423,12 +423,12 @@ bool getGroupSid(LPWSTR groupName, PSID &sid) {
 	SID_NAME_USE accountType;
 	DWORD bufferSize = 0, buffer2Size = 0;
 
-	LookupAccountName(NULL, groupName, NULL, &bufferSize, NULL, &buffer2Size, &accountType);
+	LookupAccountName(nullptr, groupName, nullptr, &bufferSize, nullptr, &buffer2Size, &accountType);
 	std::unique_ptr<SID, decltype(byte_array_deleter<SID>)> tmpSid((SID*) new BYTE[bufferSize], byte_array_deleter<SID>);
 	std::unique_ptr<WCHAR, decltype(byte_array_deleter<WCHAR>)> domain((LPTSTR) new BYTE[buffer2Size * sizeof(TCHAR)], byte_array_deleter<WCHAR>);
-	if (!LookupAccountName(NULL, groupName, tmpSid.get(), &bufferSize, domain.get(), &buffer2Size, &accountType)) {
+	if (!LookupAccountName(nullptr, groupName, tmpSid.get(), &bufferSize, domain.get(), &buffer2Size, &accountType)) {
 		reportError(L"Could not retrieve SID of newly created group");
-		NetLocalGroupDel(NULL, groupName);
+		NetLocalGroupDel(nullptr, groupName);
 		sid = nullptr;
 		return false;
 	}
@@ -448,12 +448,12 @@ bool setPrivilege(
 	LUID luid;
 
 	if (!LookupPrivilegeValue(
-		NULL,            // lookup privilege on local system
+		nullptr,            // lookup privilege on local system
 		lpszPrivilege,   // privilege to lookup
 		&luid))        // receives LUID of privilege
 	{
 		printf("LookupPrivilegeValue error: %u\n", GetLastError());
-		return FALSE;
+		return false;
 	}
 
 	tp.PrivilegeCount = 1;
@@ -465,20 +465,20 @@ bool setPrivilege(
 
 	// Enable the privilege or disable all privileges.
 
-	if (!AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), (PTOKEN_PRIVILEGES)NULL, (PDWORD)NULL))
+	if (!AdjustTokenPrivileges(hToken, false, &tp, sizeof(TOKEN_PRIVILEGES), (PTOKEN_PRIVILEGES)nullptr, (PDWORD)nullptr))
 	{
 		printf("AdjustTokenPrivileges error: %u\n", GetLastError());
-		return FALSE;
+		return false;
 	}
 
 	if (GetLastError() == ERROR_NOT_ALL_ASSIGNED)
 
 	{
 		printf("The token does not have the specified privilege. \n");
-		return FALSE;
+		return false;
 	}
 
-	return TRUE;
+	return true;
 }
 
 bool changePrivilege(bool privilegeStatus, LPCTSTR privilege) {
@@ -522,55 +522,55 @@ tokenTemplate::tokenTemplate(HANDLE &userToken) :  authenticationId(),
 
 	//parse token
 	DWORD bufferSize = 0;
-	GetTokenInformation(userToken, TokenType, NULL, 0, &bufferSize);
+	GetTokenInformation(userToken, TokenType, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	GetTokenInformation(userToken, TokenType, (LPVOID)&tokenType, bufferSize, &bufferSize);
 	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
-	GetTokenInformation(userToken, TokenUser, NULL, 0, &bufferSize);
+	GetTokenInformation(userToken, TokenUser, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	GetTokenInformation(userToken, TokenUser, (LPVOID)tokenUser.get(), bufferSize, &bufferSize);
 	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
-	GetTokenInformation(userToken, TokenGroups, NULL, 0, &bufferSize);
+	GetTokenInformation(userToken, TokenGroups, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	GetTokenInformation(userToken, TokenGroups, (LPVOID)tokenGroups.get(), bufferSize, &bufferSize);
 	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
-	GetTokenInformation(userToken, TokenPrivileges, NULL, 0, &bufferSize);
+	GetTokenInformation(userToken, TokenPrivileges, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	GetTokenInformation(userToken, TokenPrivileges, (LPVOID)tokenPrivileges.get(), bufferSize, &bufferSize);
 	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
-	GetTokenInformation(userToken, TokenOwner, NULL, 0, &bufferSize);
+	GetTokenInformation(userToken, TokenOwner, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	GetTokenInformation(userToken, TokenOwner, (LPVOID)tokenOwner.get(), bufferSize, &bufferSize);
 	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
-	GetTokenInformation(userToken, TokenPrimaryGroup, NULL, 0, &bufferSize);
+	GetTokenInformation(userToken, TokenPrimaryGroup, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	GetTokenInformation(userToken, TokenPrimaryGroup, (LPVOID)tokenPrimaryGroup.get(), bufferSize, &bufferSize);
 	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
-	GetTokenInformation(userToken, TokenDefaultDacl, NULL, 0, &bufferSize);
+	GetTokenInformation(userToken, TokenDefaultDacl, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	GetTokenInformation(userToken, TokenDefaultDacl, (LPVOID)tokenDefaultDacl.get(), bufferSize, &bufferSize);
 	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
-	GetTokenInformation(userToken, TokenSource, NULL, 0, &bufferSize);
+	GetTokenInformation(userToken, TokenSource, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	GetTokenInformation(userToken, TokenSource, (LPVOID)tokenSource.get(), bufferSize, &bufferSize);
 	if (GetLastError() != 0) throw TokenParsingException();
 
 	bufferSize = 0;
-	GetTokenInformation(userToken, TokenStatistics, NULL, 0, &bufferSize);
+	GetTokenInformation(userToken, TokenStatistics, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	std::unique_ptr<TOKEN_STATISTICS, decltype(byte_array_deleter<TOKEN_STATISTICS>)> stats((PTOKEN_STATISTICS) new BYTE[bufferSize], byte_array_deleter<TOKEN_STATISTICS>);
 	GetTokenInformation(userToken, TokenStatistics, (LPVOID)stats.get(), bufferSize, &bufferSize);
@@ -582,7 +582,7 @@ tokenTemplate::tokenTemplate(HANDLE &userToken) :  authenticationId(),
 	accessMask = TOKEN_ALL_ACCESS;
 
 	PSECURITY_QUALITY_OF_SERVICE sqos =
-		new SECURITY_QUALITY_OF_SERVICE{ sizeof(SECURITY_QUALITY_OF_SERVICE), stats->ImpersonationLevel, SECURITY_STATIC_TRACKING, FALSE };
+		new SECURITY_QUALITY_OF_SERVICE{ sizeof(SECURITY_QUALITY_OF_SERVICE), stats->ImpersonationLevel, SECURITY_STATIC_TRACKING, false };
 	objectAttributes.reset(new OBJECT_ATTRIBUTES{ sizeof(OBJECT_ATTRIBUTES), 0, 0, 0, 0, sqos });
 }
 
@@ -593,7 +593,7 @@ inline bool tokenTemplate::addGroup(PSID sid) {
 }
 
 inline bool tokenTemplate::addMultipleGroups(std::vector<PSID> vSid){
-	if (modifiedGroups != NULL) {
+	if (modifiedGroups != nullptr) {
 		reportError(L"A group was already added. Cannot perform more than one modification\n");
 		return false;
 	}
@@ -650,7 +650,7 @@ inline bool tokenTemplate::generateToken(HANDLE & token) {
 
 	if (!NT_SUCCESS(status)) {
 		reportError(L"  Cannot create modified token\n");
-		token = NULL;
+		token = nullptr;
 		return false;
 	}
 
@@ -660,7 +660,7 @@ inline bool tokenTemplate::generateToken(HANDLE & token) {
 
 DWORD GetTokenInformationSizeWrapper(HANDLE TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass) {
 	DWORD buffer = 0;
-	GetTokenInformation(TokenHandle, TokenInformationClass, NULL, 0, &buffer);
+	GetTokenInformation(TokenHandle, TokenInformationClass, nullptr, 0, &buffer);
 	return buffer;
 }
 
