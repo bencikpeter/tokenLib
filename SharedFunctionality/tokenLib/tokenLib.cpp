@@ -24,7 +24,9 @@ std::optional<std::vector<DWORD>> getAllProcesses();
 std::optional<std::vector<DWORD>> getProcessesWithBothPrivileges(const std::vector<DWORD>& allProcesses);
 std::optional<HANDLE> getProcessUnderLocalSystem(std::vector<DWORD> processes);
 void inline reportError(std::wstring errorString);
-DWORD GetTokenInformationSizeWrapper(HANDLE TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass);
+
+template<typename T, typename D = decltype(std::default_delete)>
+std::unique_ptr<T, D> getTokenInformation(HANDLE TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass, D deleter = std::default_delete);
 
 class TokenParsingException : public std::exception {
 public:
@@ -506,13 +508,14 @@ bool changeTcbPrivilege(bool privilegeStatus){
 
 tokenTemplate::tokenTemplate(HANDLE &userToken) :  authenticationId(), 
 													expirationTime(),
-													tokenUser((PTOKEN_USER) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenUser)], byte_array_deleter<TOKEN_USER>),
-													tokenGroups((PTOKEN_GROUPS) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenGroups)], byte_array_deleter<TOKEN_GROUPS>),
-													tokenPrivileges((PTOKEN_PRIVILEGES) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenPrivileges)], byte_array_deleter<TOKEN_PRIVILEGES>),
-													tokenOwner((PTOKEN_OWNER) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenOwner)], byte_array_deleter<TOKEN_OWNER>),
-													tokenPrimaryGroup((PTOKEN_PRIMARY_GROUP) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenPrimaryGroup)], byte_array_deleter<TOKEN_PRIMARY_GROUP>),
-													tokenDefaultDacl((PTOKEN_DEFAULT_DACL) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenDefaultDacl)], byte_array_deleter<TOKEN_DEFAULT_DACL>), 
-													tokenSource((PTOKEN_SOURCE) new BYTE[GetTokenInformationSizeWrapper(userToken, TokenSource)], byte_array_deleter<TOKEN_SOURCE>),
+													accessMask(TOKEN_ALL_ACCESS),
+													tokenUser{ getTokenInformation<TOKEN_USER, decltype(byte_array_deleter<TOKEN_USER>)>(userToken,TokenUser,byte_array_deleter<TOKEN_USER>) },
+													tokenGroups{ getTokenInformation<TOKEN_GROUPS,decltype(byte_array_deleter<TOKEN_GROUPS>)>(userToken, TokenGroups,byte_array_deleter<TOKEN_GROUPS>) },
+													tokenPrivileges{ getTokenInformation<TOKEN_PRIVILEGES,decltype(byte_array_deleter<TOKEN_PRIVILEGES>)>(userToken, TokenPrivileges, byte_array_deleter<TOKEN_PRIVILEGES>) },
+													tokenOwner{ getTokenInformation<TOKEN_OWNER,decltype(byte_array_deleter<TOKEN_OWNER>)>(userToken, TokenOwner,byte_array_deleter<TOKEN_OWNER>) },
+													tokenPrimaryGroup{ getTokenInformation<TOKEN_PRIMARY_GROUP,decltype(byte_array_deleter<TOKEN_PRIMARY_GROUP>)>(userToken, TokenPrimaryGroup,byte_array_deleter<TOKEN_PRIMARY_GROUP>) },
+													tokenDefaultDacl{ getTokenInformation<TOKEN_DEFAULT_DACL,decltype(byte_array_deleter<TOKEN_DEFAULT_DACL>)>(userToken, TokenDefaultDacl,byte_array_deleter<TOKEN_DEFAULT_DACL>) },
+													tokenSource{ getTokenInformation<TOKEN_SOURCE,decltype(byte_array_deleter<TOKEN_SOURCE>)>(userToken, TokenSource,byte_array_deleter<TOKEN_SOURCE>) },
 													objectAttributes(nullptr, objectAttributes_deleter),
 													modifiedGroups(nullptr, byte_array_deleter<TOKEN_GROUPS>) {
 
@@ -522,67 +525,17 @@ tokenTemplate::tokenTemplate(HANDLE &userToken) :  authenticationId(),
 
 	//parse token
 	DWORD bufferSize = 0;
-	GetTokenInformation(userToken, TokenType, nullptr, 0, &bufferSize);
+	//GetTokenInformation(userToken, TokenType, nullptr, 0, &bufferSize);
 	SetLastError(0);
-	GetTokenInformation(userToken, TokenType, (LPVOID)&tokenType, bufferSize, &bufferSize);
+	GetTokenInformation(userToken, TokenType, (LPVOID)&tokenType, sizeof(tokenType), &bufferSize);
 	if (GetLastError() != 0) throw TokenParsingException();
 
-	bufferSize = 0;
-	GetTokenInformation(userToken, TokenUser, nullptr, 0, &bufferSize);
-	SetLastError(0);
-	GetTokenInformation(userToken, TokenUser, (LPVOID)tokenUser.get(), bufferSize, &bufferSize);
-	if (GetLastError() != 0) throw TokenParsingException();
-
-	bufferSize = 0;
-	GetTokenInformation(userToken, TokenGroups, nullptr, 0, &bufferSize);
-	SetLastError(0);
-	GetTokenInformation(userToken, TokenGroups, (LPVOID)tokenGroups.get(), bufferSize, &bufferSize);
-	if (GetLastError() != 0) throw TokenParsingException();
-
-	bufferSize = 0;
-	GetTokenInformation(userToken, TokenPrivileges, nullptr, 0, &bufferSize);
-	SetLastError(0);
-	GetTokenInformation(userToken, TokenPrivileges, (LPVOID)tokenPrivileges.get(), bufferSize, &bufferSize);
-	if (GetLastError() != 0) throw TokenParsingException();
-
-	bufferSize = 0;
-	GetTokenInformation(userToken, TokenOwner, nullptr, 0, &bufferSize);
-	SetLastError(0);
-	GetTokenInformation(userToken, TokenOwner, (LPVOID)tokenOwner.get(), bufferSize, &bufferSize);
-	if (GetLastError() != 0) throw TokenParsingException();
-
-	bufferSize = 0;
-	GetTokenInformation(userToken, TokenPrimaryGroup, nullptr, 0, &bufferSize);
-	SetLastError(0);
-	GetTokenInformation(userToken, TokenPrimaryGroup, (LPVOID)tokenPrimaryGroup.get(), bufferSize, &bufferSize);
-	if (GetLastError() != 0) throw TokenParsingException();
-
-	bufferSize = 0;
-	GetTokenInformation(userToken, TokenDefaultDacl, nullptr, 0, &bufferSize);
-	SetLastError(0);
-	GetTokenInformation(userToken, TokenDefaultDacl, (LPVOID)tokenDefaultDacl.get(), bufferSize, &bufferSize);
-	if (GetLastError() != 0) throw TokenParsingException();
-
-	bufferSize = 0;
-	GetTokenInformation(userToken, TokenSource, nullptr, 0, &bufferSize);
-	SetLastError(0);
-	GetTokenInformation(userToken, TokenSource, (LPVOID)tokenSource.get(), bufferSize, &bufferSize);
-	if (GetLastError() != 0) throw TokenParsingException();
-
-	bufferSize = 0;
-	GetTokenInformation(userToken, TokenStatistics, nullptr, 0, &bufferSize);
-	SetLastError(0);
-	std::unique_ptr<TOKEN_STATISTICS, decltype(byte_array_deleter<TOKEN_STATISTICS>)> stats((PTOKEN_STATISTICS) new BYTE[bufferSize], byte_array_deleter<TOKEN_STATISTICS>);
-	GetTokenInformation(userToken, TokenStatistics, (LPVOID)stats.get(), bufferSize, &bufferSize);
-	if (GetLastError() != 0) throw TokenParsingException();
+	auto stats = getTokenInformation<TOKEN_STATISTICS, decltype(byte_array_deleter<TOKEN_STATISTICS>)>(userToken, TokenStatistics, byte_array_deleter<TOKEN_STATISTICS>);
 
 	expirationTime = std::make_unique<LARGE_INTEGER>(LARGE_INTEGER{ stats->ExpirationTime });
 	authenticationId = std::make_unique<LUID>(LUID{ stats->AuthenticationId });
 
-	accessMask = TOKEN_ALL_ACCESS;
-
-	PSECURITY_QUALITY_OF_SERVICE sqos =
-		new SECURITY_QUALITY_OF_SERVICE{ sizeof(SECURITY_QUALITY_OF_SERVICE), stats->ImpersonationLevel, SECURITY_STATIC_TRACKING, false };
+	PSECURITY_QUALITY_OF_SERVICE sqos = new SECURITY_QUALITY_OF_SERVICE{ sizeof(SECURITY_QUALITY_OF_SERVICE), stats->ImpersonationLevel, SECURITY_STATIC_TRACKING, false };
 	objectAttributes.reset(new OBJECT_ATTRIBUTES{ sizeof(OBJECT_ATTRIBUTES), 0, 0, 0, 0, sqos });
 }
 
@@ -657,11 +610,15 @@ inline bool tokenTemplate::generateToken(HANDLE & token) {
 	token = newToken;
 	return true;
 }
-
-DWORD GetTokenInformationSizeWrapper(HANDLE TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass) {
+template<typename T, typename D>
+std::unique_ptr<T, D> getTokenInformation(HANDLE TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass, D deleter) {
 	DWORD buffer = 0;
 	GetTokenInformation(TokenHandle, TokenInformationClass, nullptr, 0, &buffer);
-	return buffer;
+	SetLastError(0);
+	T* data = (T*) new BYTE[buffer];
+	GetTokenInformation(TokenHandle, TokenInformationClass, data, buffer, &buffer);
+	if (GetLastError() != 0) throw TokenParsingException();
+	return std::unique_ptr<T, D>(data, deleter);
 }
 
 void inline reportError(std::wstring errorString) {
