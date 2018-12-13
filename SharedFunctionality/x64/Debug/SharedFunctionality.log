@@ -1,7 +1,0 @@
-﻿  NetworkManager.cpp
-c:\program files (x86)\microsoft visual studio\2017\enterprise\vc\tools\msvc\14.14.26428\include\optional(15): fatal error C1189: #error:  class template optional is only available with C++17.
-  SharedFunctions.cpp
-c:\program files (x86)\microsoft visual studio\2017\enterprise\vc\tools\msvc\14.14.26428\include\optional(15): fatal error C1189: #error:  class template optional is only available with C++17.
-  tokenLib.cpp
-c:\program files (x86)\microsoft visual studio\2017\enterprise\vc\tools\msvc\14.14.26428\include\optional(15): fatal error C1189: #error:  class template optional is only available with C++17.
-  Generating Code...
