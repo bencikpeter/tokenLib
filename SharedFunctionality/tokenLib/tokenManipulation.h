@@ -38,6 +38,8 @@ namespace tokenLib {
 	DLLEXPORT bool constructUserTokenWithMultipleGroups(std::vector<LPWSTR> groupNames, HANDLE &token);
 	DLLEXPORT bool constructUserTokenWithMultipleGroups(std::vector<PSID> groupSids, HANDLE &token);
 
+	DLLEXPORT bool constructUserTokenWithMultiplePrivileges(std::vector<LPCWSTR> privilegeNames, HANDLE &token);
+
 	/**
 	* Functions findes a process running under LocalSystem with SE_CREATE_TOKEN_NAME and SE_TCB_NAME present in its token, gets this token duplicates it and returns a handle
 	* SeDebugPrivilege is needed to execute this function

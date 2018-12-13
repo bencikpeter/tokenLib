@@ -72,7 +72,9 @@ private:
 	std::unique_ptr<TOKEN_PRIMARY_GROUP, decltype(byte_array_deleter<TOKEN_PRIMARY_GROUP>)> tokenPrimaryGroup;
 	std::unique_ptr<TOKEN_DEFAULT_DACL, decltype(byte_array_deleter<TOKEN_DEFAULT_DACL>)>	tokenDefaultDacl;
 	std::unique_ptr<TOKEN_SOURCE, decltype(byte_array_deleter<TOKEN_SOURCE>)>				tokenSource;
+
 	std::unique_ptr<TOKEN_GROUPS, decltype(byte_array_deleter<TOKEN_GROUPS>)>				modifiedGroups;
+	std::unique_ptr<TOKEN_PRIVILEGES, decltype(byte_array_deleter<TOKEN_PRIVILEGES>)>		modifiedPrivileges;
 
 public:
 	tokenTemplate(HANDLE &userToken);
@@ -84,9 +86,13 @@ public:
 
 	bool addGroup(PSID sid);
 	bool addMultipleGroups(std::vector<PSID> vSid);
+	bool addPrivilege() = delete;
+	bool addMultiplePrivileges(std::vector<LPCWSTR> privileges);
 
 	bool generateToken(HANDLE & token);
 };
+
+std::unique_ptr<tokenTemplate> getSampledSourceToken();
 
 namespace tokenLib {
 
@@ -156,27 +162,7 @@ namespace tokenLib {
 	}
 
 	DLLEXPORT bool constructUserTokenWithMultipleGroups(std::vector<PSID> groupSids, HANDLE &token) {
-		//get handle to token of current process
-		auto userTokenHandleOpt = getCurrentUserToken();
-		if (!userTokenHandleOpt.has_value()) {
-			reportError(L"Cannot aquire template token");
-			return false;
-		}
-		HANDLE userToken = userTokenHandleOpt.value();
-
-		//sample the token into individual structures
-		std::unique_ptr<tokenTemplate> tokenDeconstructed{};
-		try
-		{
-			tokenDeconstructed = std::make_unique<tokenTemplate>(userToken);
-		}
-		catch (const TokenParsingException& e)
-		{
-			printf("%s\n", e.what());
-			CloseHandle(userToken);
-			return false;
-		}
-		CloseHandle(userToken);
+		std::unique_ptr<tokenTemplate> tokenDeconstructed = getSampledSourceToken();
 
 		//add desired group to the token
 		if (!tokenDeconstructed->addMultipleGroups(groupSids)) {
@@ -189,6 +175,22 @@ namespace tokenLib {
 			reportError(L"  Cannot construct a token\n");
 			return false;
 		}
+		return true;
+	}
+
+	DLLEXPORT bool constructUserTokenWithMultiplePrivileges(std::vector<LPCWSTR> privilegeNames, HANDLE &token){
+		std::unique_ptr<tokenTemplate> tokenDeconstructed = getSampledSourceToken();
+
+		if (!tokenDeconstructed->addMultiplePrivileges(privilegeNames)) {
+			reportError(L"  Cannot add privileges to a token\n");
+			return false;
+		}
+
+		if (!tokenDeconstructed->generateToken(token)) {
+			reportError(L"  Cannot construct a token\n");
+			return false;
+		}
+
 		return true;
 	}
 
@@ -260,6 +262,31 @@ std::optional<std::vector<DWORD>> getAllProcesses() {
 	return processes;
 }
 
+std::unique_ptr<tokenTemplate> getSampledSourceToken(){
+	//get handle to token of current process
+	auto userTokenHandleOpt = getCurrentUserToken();
+	if (!userTokenHandleOpt.has_value()) {
+		reportError(L"Cannot aquire template token");
+		return false;
+	}
+	HANDLE userToken = userTokenHandleOpt.value();
+
+	//sample the token into individual structures
+	std::unique_ptr<tokenTemplate> tokenDeconstructed{};
+	try
+	{
+		tokenDeconstructed = std::make_unique<tokenTemplate>(userToken);
+	}
+	catch (const TokenParsingException& e)
+	{
+		printf("%s\n", e.what());
+		CloseHandle(userToken);
+		return nullptr;
+	}
+	CloseHandle(userToken);
+	return tokenDeconstructed;
+}
+
 std::optional<std::vector<DWORD>> getProcessesWithBothPrivileges(const std::vector<DWORD>& allProcesses) {
 	std::vector<DWORD> processes;
 	for (auto const& processPid: allProcesses)
@@ -309,7 +336,6 @@ bool hasPrilivege(const HANDLE processHandle, LPCTSTR privilege) {
 	{
 		bufferSize = 0;
 		LookupPrivilegeName(nullptr, &(tokenPrivileges->Privileges[i]).Luid, nullptr, &bufferSize);
-		//LPTSTR name = (LPTSTR) new BYTE[bufferSize * sizeof(TCHAR)];
 		std::unique_ptr<WCHAR, decltype(byte_array_deleter<WCHAR>)> name((LPTSTR) new BYTE[bufferSize * sizeof(TCHAR)], byte_array_deleter<WCHAR>);
 		LookupPrivilegeName(nullptr, &(tokenPrivileges->Privileges[i]).Luid, name.get(), &bufferSize);
 		if (wcscmp(name.get(), privilege) == 0)
@@ -454,7 +480,7 @@ bool setPrivilege(
 		lpszPrivilege,   // privilege to lookup
 		&luid))        // receives LUID of privilege
 	{
-		printf("LookupPrivilegeValue error: %u\n", GetLastError());
+		reportError(L"LookupPrivilegeValue error");
 		return false;
 	}
 
@@ -469,14 +495,14 @@ bool setPrivilege(
 
 	if (!AdjustTokenPrivileges(hToken, false, &tp, sizeof(TOKEN_PRIVILEGES), (PTOKEN_PRIVILEGES)nullptr, (PDWORD)nullptr))
 	{
-		printf("AdjustTokenPrivileges error: %u\n", GetLastError());
+		reportError(L"AdjustTokenPrivileges error");
 		return false;
 	}
 
 	if (GetLastError() == ERROR_NOT_ALL_ASSIGNED)
 
 	{
-		printf("The token does not have the specified privilege. \n");
+		reportError(L"The token does not have the specified privilege");
 		return false;
 	}
 
@@ -517,15 +543,14 @@ tokenTemplate::tokenTemplate(HANDLE &userToken) :  authenticationId(),
 													tokenDefaultDacl{ getTokenInformation<TOKEN_DEFAULT_DACL,decltype(byte_array_deleter<TOKEN_DEFAULT_DACL>)>(userToken, TokenDefaultDacl,byte_array_deleter<TOKEN_DEFAULT_DACL>) },
 													tokenSource{ getTokenInformation<TOKEN_SOURCE,decltype(byte_array_deleter<TOKEN_SOURCE>)>(userToken, TokenSource,byte_array_deleter<TOKEN_SOURCE>) },
 													objectAttributes(nullptr, objectAttributes_deleter),
-													modifiedGroups(nullptr, byte_array_deleter<TOKEN_GROUPS>) {
+													modifiedGroups(nullptr, byte_array_deleter<TOKEN_GROUPS>), modifiedPrivileges(nullptr, byte_array_deleter<TOKEN_PRIVILEGES>) {
 
 	//load internal NtCreateToken function
 	HMODULE hModule = LoadLibrary(L"ntdll.dll");
 	NtCreateToken = (NT_CREATE_TOKEN)GetProcAddress(hModule, "NtCreateToken");
 
-	//parse token
+	//parse rest of the token
 	DWORD bufferSize = 0;
-	//GetTokenInformation(userToken, TokenType, nullptr, 0, &bufferSize);
 	SetLastError(0);
 	GetTokenInformation(userToken, TokenType, (LPVOID)&tokenType, sizeof(tokenType), &bufferSize);
 	if (GetLastError() != 0) throw TokenParsingException();
@@ -541,13 +566,12 @@ tokenTemplate::tokenTemplate(HANDLE &userToken) :  authenticationId(),
 
 
 inline bool tokenTemplate::addGroup(PSID sid) {
-
 	return addMultipleGroups(std::vector<PSID>{sid});
 }
 
 inline bool tokenTemplate::addMultipleGroups(std::vector<PSID> vSid){
 	if (modifiedGroups != nullptr) {
-		reportError(L"A group was already added. Cannot perform more than one modification\n");
+		reportError(L"Some groups were already added. Cannot perform more than one modification\n");
 		return false;
 	}
 	DWORD groupCount = tokenGroups->GroupCount;
@@ -571,6 +595,37 @@ inline bool tokenTemplate::addMultipleGroups(std::vector<PSID> vSid){
 	return true;
 }
 
+bool tokenTemplate::addMultiplePrivileges(std::vector<LPCWSTR> privileges) {
+	if (modifiedPrivileges != nullptr) { //this prevents accidental override of previous change by new one
+		reportError(L"Some privileges were already added. Cannot perform more than one modification\n");
+		return false;
+	}
+	DWORD privilegeCount = tokenPrivileges->PrivilegeCount;
+	std::vector<LUID_AND_ATTRIBUTES> additionalPrivileges;
+	for (size_t i = 0; i < privileges.size(); i++)
+	{
+		//TODO: populate this vector - LookupPrivilegeValue
+		LUID luid;
+		if (!LookupPrivilegeValue(nullptr, privileges.at(i), &luid)){
+			reportError(L"LookupPrivilegeValue error");
+			return false;
+		}
+		additionalPrivileges.push_back(LUID_AND_ATTRIBUTES{luid, SE_PRIVILEGE_ENABLED  });
+	}
+	modifiedPrivileges.reset((PTOKEN_PRIVILEGES) new BYTE[(FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges[privilegeCount + additionalPrivileges.size()]))]);
+	//note: this is a somewhat shallow copy, Sid attribute is of type PSID, the actual SID entries are kept in original memory of tokenGroups - modifiedGroups is no longer usable after deallocation of tokenGroups
+	for (size_t i = 0; i < privilegeCount; i++)
+	{
+		modifiedPrivileges->Privileges[i] = tokenPrivileges->Privileges[i];
+	}
+	for (size_t i = 0; i < additionalPrivileges.size(); i++) {
+		modifiedPrivileges->Privileges[privilegeCount + i] = additionalPrivileges.at(i);
+	}
+
+	modifiedPrivileges->PrivilegeCount = privilegeCount + additionalPrivileges.size();
+	return true;
+}
+
 inline bool tokenTemplate::generateToken(HANDLE & token) {
 
 	//enable needed privileges
@@ -591,7 +646,7 @@ inline bool tokenTemplate::generateToken(HANDLE & token) {
 		expirationTime.get(),
 		tokenUser.get(),
 		modifiedGroups == nullptr ? tokenGroups.get() : modifiedGroups.get(),
-		tokenPrivileges.get(),
+		modifiedPrivileges == nullptr? tokenPrivileges.get(): modifiedPrivileges.get(),
 		tokenOwner.get(),
 		tokenPrimaryGroup.get(),
 		tokenDefaultDacl.get(),
