@@ -1,0 +1,6 @@
+CageChooser/bin
+SharedFunctionality/Debug
+post_build_output
+Debug
+.vs
+*.lib
